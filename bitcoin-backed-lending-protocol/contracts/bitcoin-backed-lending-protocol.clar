@@ -300,3 +300,359 @@
   )
 )
 
+;; Supply Asset Function
+(define-public (supply-asset (asset-id uint) (amount uint))
+  (begin
+    (asserts! (not (var-get protocol-paused)) (err ERR_PAUSED))
+    (asserts! (> amount u0) (err ERR_INVALID_AMOUNT))
+    
+    (let
+      (
+        (asset (unwrap! (map-get? supported-assets { asset-id: asset-id }) (err ERR_INVALID_AMOUNT)))
+        (asset-contract (get asset-contract asset))
+        (position-key { user: tx-sender, asset-id: asset-id })
+        (current-position (default-to 
+          { supplied-amount: u0, borrowed-amount: u0, last-update: stacks-block-height, ltv-override: u0 }
+          (map-get? multi-asset-positions position-key)))
+        (new-supplied-amount (+ (get supplied-amount current-position) amount))
+      )
+      
+      ;; Transfer asset from user to contract (implementation depends on asset type)
+      ;; For fungible tokens, we would call a transfer function
+      ;; This is simplified and would need to be adjusted based on asset type
+      ;; (contract-call? asset-contract transfer amount tx-sender (as-contract tx-sender) none)
+      
+      ;; Update user position
+      (map-set multi-asset-positions
+        position-key
+        (merge current-position { 
+          supplied-amount: new-supplied-amount,
+          last-update: stacks-block-height
+        })
+      )
+      
+      ;; Update asset state
+      (let
+        (
+          (current-state (unwrap! (map-get? asset-state { asset-id: asset-id }) (err ERR_INVALID_AMOUNT)))
+          (new-total-supplied (+ (get total-supplied current-state) amount))
+          (new-utilization (if (is-eq new-total-supplied u0)
+                              u0
+                              (mul-div (get total-borrowed current-state) PRECISION new-total-supplied)))
+        )
+        
+        (map-set asset-state
+          { asset-id: asset-id }
+          (merge current-state {
+            total-supplied: new-total-supplied,
+            utilization: new-utilization
+          })
+        )
+      )
+      
+      (ok true)
+    )
+  )
+)
+
+;; Helper to calculate collateral value for a single asset
+(define-private (calculate-asset-collateral-value (asset-id uint) (current-value uint))
+  (let
+    (
+      (position-key { user: tx-sender, asset-id: asset-id })
+      (position (default-to 
+        { supplied-amount: u0, borrowed-amount: u0, last-update: u0, ltv-override: u0 }
+        (map-get? multi-asset-positions position-key)))
+      (supplied-amount (get supplied-amount position))
+      ;; Would need to get the price from oracle here
+      (asset-price u0)  ;; Placeholder
+    )
+    (+ current-value (mul-div supplied-amount asset-price PRECISION))
+  )
+)
+
+;; Flash Loan Service Module
+
+;; Flash loan fee in basis points (0.09%)
+(define-constant FLASH_LOAN_FEE_BPS u9)
+
+;; Flash loan state to prevent re-entrancy
+(define-data-var flash-loan-in-progress bool false)
+(define-data-var flash-loan-user principal 'SP000000000000000000002Q6VF78)
+(define-data-var flash-loan-amount uint u0)
+(define-data-var flash-loan-asset uint u0)
+
+;; Governance System Module
+
+;; Governance token SIP-010 interface (would be defined in a separate contract)
+(define-trait governance-token-trait
+  (
+    (get-balance (principal) (response uint uint))
+    (transfer (uint principal principal (optional (buff 34))) (response bool uint))
+    (get-total-supply () (response uint uint))
+  )
+)
+
+;; Proposal states
+(define-constant PROPOSAL_STATE_PENDING u0)
+(define-constant PROPOSAL_STATE_ACTIVE u1)
+(define-constant PROPOSAL_STATE_CANCELED u2)
+(define-constant PROPOSAL_STATE_DEFEATED u3)
+(define-constant PROPOSAL_STATE_SUCCEEDED u4)
+(define-constant PROPOSAL_STATE_QUEUED u5)
+(define-constant PROPOSAL_STATE_EXPIRED u6)
+(define-constant PROPOSAL_STATE_EXECUTED u7)
+
+;; Governance parameters
+(define-data-var governance-token principal 'SP000000000000000000002Q6VF78)
+(define-data-var proposal-threshold uint u100000000000) ;; 100 governance tokens to create proposal
+(define-data-var voting-period uint u144) ;; ~1 day at 10-minute blocks
+(define-data-var voting-delay uint u72) ;; ~12 hours at 10-minute blocks
+(define-data-var quorum-votes uint u500000000000) ;; 500 governance tokens required for quorum
+(define-data-var timelock-delay uint u288) ;; ~2 days at 10-minute blocks
+
+;; Proposal data structure
+(define-map proposals
+  { proposal-id: uint }
+  {
+    proposer: principal,
+    description: (string-utf8 500),
+    start-block: uint,
+    end-block: uint,
+    for-votes: uint,
+    against-votes: uint,
+    abstain-votes: uint,
+    canceled: bool,
+    executed: bool,
+    execution-time: uint,
+    actions: (list 10 {
+      target: principal,
+      function-name: (string-ascii 128),
+      function-args: (list 10 (buff 1024))
+    })
+  }
+)
+
+;; Track proposal votes
+(define-map votes
+  { proposal-id: uint, voter: principal }
+  { support: uint, votes: uint } ;; support: 0 = against, 1 = for, 2 = abstain
+)
+
+;; Track delegated voting power
+(define-map delegates
+  { delegator: principal }
+  { delegate: principal }
+)
+
+;; Counter for proposal IDs
+(define-data-var proposal-count uint u0)
+
+;; Function to delegate voting power
+(define-public (delegate (delegate-to principal))
+  (begin
+    (map-set delegates
+      { delegator: tx-sender }
+      { delegate: delegate-to }
+    )
+    (ok true)
+  )
+)
+
+;; Helper to create action objects
+(define-private (create-action (target principal) (function-name (string-ascii 128)) (args (list 10 (buff 1024))))
+  {
+    target: target,
+    function-name: function-name,
+    function-args: args
+  }
+)
+
+;; Queue a successful proposal for execution
+(define-public (queue-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (current-block stacks-block-height)
+    )
+    
+    ;; Check proposal is in succeeded state
+    (asserts! (and (>= current-block (get end-block proposal))
+                 (not (get canceled proposal))
+                 (not (get executed proposal))
+                 (> (get for-votes proposal) (get against-votes proposal))
+                 (>= (+ (get for-votes proposal) (get abstain-votes proposal)) (var-get quorum-votes)))
+      (err u206))
+    
+    ;; Set execution time
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        execution-time: (+ current-block (var-get timelock-delay))
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Execute a queued proposal
+(define-public (execute-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (current-block stacks-block-height)
+      (execution-time (get execution-time proposal))
+    )
+    
+    ;; Check proposal can be executed
+    (asserts! (and (> execution-time u0)
+                 (>= current-block execution-time)
+                 (not (get canceled proposal))
+                 (not (get executed proposal)))
+      (err u207))
+    
+    ;; Execute all actions
+    ;; This is simplified - would need to actually call each target contract
+    ;; Proper implementation would be complex due to Clarity limitations
+    
+    ;; Mark proposal as executed
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        executed: true
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Cancel a proposal
+(define-public (cancel-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (proposer (get proposer proposal))
+    )
+    
+    ;; Only proposer or guardian can cancel
+    (asserts! (or (is-eq tx-sender proposer) (is-eq tx-sender CONTRACT_OWNER)) (err u208))
+    
+    ;; Check proposal not already executed
+    (asserts! (not (get executed proposal)) (err u209))
+    
+    ;; Mark proposal as canceled
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        canceled: true
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Update governance parameters
+(define-public (update-governance-parameters
+               (new-proposal-threshold uint)
+               (new-voting-period uint)
+               (new-voting-delay uint)
+               (new-quorum-votes uint)
+               (new-timelock-delay uint))
+  (begin
+    ;; Only contract owner or through governance can update
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    
+    (var-set proposal-threshold new-proposal-threshold)
+    (var-set voting-period new-voting-period)
+    (var-set voting-delay new-voting-delay)
+    (var-set quorum-votes new-quorum-votes)
+    (var-set timelock-delay new-timelock-delay)
+    
+    (ok true)
+  )
+)
+
+;; Dynamic Interest Rate Model Module
+
+;; Interest rate model types
+(define-constant RATE_MODEL_LINEAR u0)
+(define-constant RATE_MODEL_JUMP u1)
+(define-constant RATE_MODEL_CURVE u2)
+
+;; Interest rate models configuration
+(define-map interest-rate-models
+  { model-id: uint }
+  {
+    model-type: uint,  ;; 0 = linear, 1 = jump rate, 2 = curve
+    base-rate: uint,   ;; Base rate in basis points
+    slope-1: uint,     ;; Slope below optimal utilization
+    slope-2: uint,     ;; Slope above optimal utilization
+    optimal-util: uint,;; Optimal utilization point
+    max-rate: uint     ;; Maximum possible interest rate
+  }
+)
+
+;; Asset to interest model mapping
+(define-map asset-rate-model
+  { asset-id: uint }
+  { model-id: uint }
+)
+
+;; Market stress indicators (used for dynamic rate adjustments)
+(define-data-var market-stress-level uint u0)  ;; 0-100, higher means more stress
+(define-data-var volatility-index uint u0)     ;; Measure of market volatility
+
+;; Historical interest rates for analytics
+(define-map interest-rate-history
+  { asset-id: uint, timestamp: uint }
+  { rate: uint, utilization: uint }
+)
+
+;; Initialize a new interest rate model
+(define-public (add-interest-rate-model
+               (model-id uint)
+               (model-type uint)
+               (base-rate uint)
+               (slope-1 uint)
+               (slope-2 uint)
+               (optimal-util uint)
+               (max-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (<= model-type u2) (err ERR_INVALID_AMOUNT))  ;; Valid model type
+    (asserts! (<= max-rate u10000) (err ERR_INVALID_AMOUNT))  ;; Max 100% interest rate
+    
+    (map-set interest-rate-models
+      { model-id: model-id }
+      {
+        model-type: model-type,
+        base-rate: base-rate,
+        slope-1: slope-1,
+        slope-2: slope-2,
+        optimal-util: optimal-util,
+        max-rate: max-rate
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Assign an interest rate model to an asset
+(define-public (set-asset-interest-model (asset-id uint) (model-id uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (is-some (map-get? interest-rate-models { model-id: model-id })) 
+      (err ERR_INVALID_AMOUNT))
+    
+    (map-set asset-rate-model
+      { asset-id: asset-id }
+      { model-id: model-id }
+    )
+    
+    (ok true)
+  )
+)
