@@ -300,3 +300,59 @@
   )
 )
 
+;; Supply Asset Function
+(define-public (supply-asset (asset-id uint) (amount uint))
+  (begin
+    (asserts! (not (var-get protocol-paused)) (err ERR_PAUSED))
+    (asserts! (> amount u0) (err ERR_INVALID_AMOUNT))
+    
+    (let
+      (
+        (asset (unwrap! (map-get? supported-assets { asset-id: asset-id }) (err ERR_INVALID_AMOUNT)))
+        (asset-contract (get asset-contract asset))
+        (position-key { user: tx-sender, asset-id: asset-id })
+        (current-position (default-to 
+          { supplied-amount: u0, borrowed-amount: u0, last-update: stacks-block-height, ltv-override: u0 }
+          (map-get? multi-asset-positions position-key)))
+        (new-supplied-amount (+ (get supplied-amount current-position) amount))
+      )
+      
+      ;; Transfer asset from user to contract (implementation depends on asset type)
+      ;; For fungible tokens, we would call a transfer function
+      ;; This is simplified and would need to be adjusted based on asset type
+      ;; (contract-call? asset-contract transfer amount tx-sender (as-contract tx-sender) none)
+      
+      ;; Update user position
+      (map-set multi-asset-positions
+        position-key
+        (merge current-position { 
+          supplied-amount: new-supplied-amount,
+          last-update: stacks-block-height
+        })
+      )
+      
+      ;; Update asset state
+      (let
+        (
+          (current-state (unwrap! (map-get? asset-state { asset-id: asset-id }) (err ERR_INVALID_AMOUNT)))
+          (new-total-supplied (+ (get total-supplied current-state) amount))
+          (new-utilization (if (is-eq new-total-supplied u0)
+                              u0
+                              (mul-div (get total-borrowed current-state) PRECISION new-total-supplied)))
+        )
+        
+        (map-set asset-state
+          { asset-id: asset-id }
+          (merge current-state {
+            total-supplied: new-total-supplied,
+            utilization: new-utilization
+          })
+        )
+      )
+      
+      (ok true)
+    )
+  )
+)
+
+
