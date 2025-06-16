@@ -527,3 +527,29 @@
     (ok true)
   )
 )
+
+;; Cancel a proposal
+(define-public (cancel-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (proposer (get proposer proposal))
+    )
+    
+    ;; Only proposer or guardian can cancel
+    (asserts! (or (is-eq tx-sender proposer) (is-eq tx-sender CONTRACT_OWNER)) (err u208))
+    
+    ;; Check proposal not already executed
+    (asserts! (not (get executed proposal)) (err u209))
+    
+    ;; Mark proposal as canceled
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        canceled: true
+      })
+    )
+    
+    (ok true)
+  )
+)
