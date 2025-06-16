@@ -162,3 +162,49 @@
   )
 )
 
+;; Update protocol parameters
+(define-public (update-protocol-parameters 
+                (new-min-borrow uint) 
+                (new-max-utilization uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (>= new-max-utilization u5000) (err ERR_INVALID_AMOUNT)) ;; Min 50% utilization
+    (asserts! (<= new-max-utilization u9500) (err ERR_INVALID_AMOUNT)) ;; Max 95% utilization
+    
+    (var-set min-borrow-amount new-min-borrow)
+    (var-set max-utilization new-max-utilization)
+    
+    (ok true)
+  )
+)
+
+;; Multi-Collateral Support Module
+
+;; Asset configuration map
+(define-map supported-assets
+  { asset-id: uint }
+  {
+    asset-type: (string-ascii 10),        ;; "STX", "BTC", "NFT", etc.
+    asset-contract: principal,            ;; Contract address for the asset
+    oracle-contract: principal,           ;; Price oracle contract
+    ltv-ratio: uint,                      ;; Loan-to-value ratio (in basis points)
+    liquidation-threshold: uint,          ;; When position becomes liquidatable (in basis points)
+    liquidation-penalty: uint,            ;; Penalty for liquidation (in basis points)
+    borrowing-enabled: bool,              ;; Can this asset be borrowed against
+    borrow-cap: uint,                     ;; Maximum amount that can be borrowed against this asset
+    reserve-factor: uint                  ;; Portion of interest that goes to reserves (in basis points)
+  }
+)
+
+;; Asset state (for each supported asset)
+(define-map asset-state
+  { asset-id: uint }
+  {
+    total-supplied: uint,                 ;; Total amount supplied of this asset
+    total-borrowed: uint,                 ;; Total amount borrowed against this asset
+    utilization: uint,                    ;; Current utilization ratio (in basis points)
+    interest-rate: uint,                  ;; Current interest rate (in basis points)
+    exchange-rate: uint                   ;; Exchange rate between asset and internal token
+  }
+)
+
