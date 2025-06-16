@@ -445,3 +445,85 @@
   { delegate: principal }
 )
 
+;; Counter for proposal IDs
+(define-data-var proposal-count uint u0)
+
+;; Function to delegate voting power
+(define-public (delegate (delegate-to principal))
+  (begin
+    (map-set delegates
+      { delegator: tx-sender }
+      { delegate: delegate-to }
+    )
+    (ok true)
+  )
+)
+
+;; Helper to create action objects
+(define-private (create-action (target principal) (function-name (string-ascii 128)) (args (list 10 (buff 1024))))
+  {
+    target: target,
+    function-name: function-name,
+    function-args: args
+  }
+)
+
+;; Queue a successful proposal for execution
+(define-public (queue-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (current-block stacks-block-height)
+    )
+    
+    ;; Check proposal is in succeeded state
+    (asserts! (and (>= current-block (get end-block proposal))
+                 (not (get canceled proposal))
+                 (not (get executed proposal))
+                 (> (get for-votes proposal) (get against-votes proposal))
+                 (>= (+ (get for-votes proposal) (get abstain-votes proposal)) (var-get quorum-votes)))
+      (err u206))
+    
+    ;; Set execution time
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        execution-time: (+ current-block (var-get timelock-delay))
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Execute a queued proposal
+(define-public (execute-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) (err u202)))
+      (current-block stacks-block-height)
+      (execution-time (get execution-time proposal))
+    )
+    
+    ;; Check proposal can be executed
+    (asserts! (and (> execution-time u0)
+                 (>= current-block execution-time)
+                 (not (get canceled proposal))
+                 (not (get executed proposal)))
+      (err u207))
+    
+    ;; Execute all actions
+    ;; This is simplified - would need to actually call each target contract
+    ;; Proper implementation would be complex due to Clarity limitations
+    
+    ;; Mark proposal as executed
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal {
+        executed: true
+      })
+    )
+    
+    (ok true)
+  )
+)
