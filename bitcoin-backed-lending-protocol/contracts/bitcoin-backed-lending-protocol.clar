@@ -640,3 +640,19 @@
     (ok true)
   )
 )
+
+;; Assign an interest rate model to an asset
+(define-public (set-asset-interest-model (asset-id uint) (model-id uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (is-some (map-get? interest-rate-models { model-id: model-id })) 
+      (err ERR_INVALID_AMOUNT))
+    
+    (map-set asset-rate-model
+      { asset-id: asset-id }
+      { model-id: model-id }
+    )
+    
+    (ok true)
+  )
+)
