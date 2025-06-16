@@ -355,4 +355,52 @@
   )
 )
 
+;; Helper to calculate collateral value for a single asset
+(define-private (calculate-asset-collateral-value (asset-id uint) (current-value uint))
+  (let
+    (
+      (position-key { user: tx-sender, asset-id: asset-id })
+      (position (default-to 
+        { supplied-amount: u0, borrowed-amount: u0, last-update: u0, ltv-override: u0 }
+        (map-get? multi-asset-positions position-key)))
+      (supplied-amount (get supplied-amount position))
+      ;; Would need to get the price from oracle here
+      (asset-price u0)  ;; Placeholder
+    )
+    (+ current-value (mul-div supplied-amount asset-price PRECISION))
+  )
+)
+
+;; Flash Loan Service Module
+
+;; Flash loan fee in basis points (0.09%)
+(define-constant FLASH_LOAN_FEE_BPS u9)
+
+;; Flash loan state to prevent re-entrancy
+(define-data-var flash-loan-in-progress bool false)
+(define-data-var flash-loan-user principal 'SP000000000000000000002Q6VF78)
+(define-data-var flash-loan-amount uint u0)
+(define-data-var flash-loan-asset uint u0)
+
+;; Governance System Module
+
+;; Governance token SIP-010 interface (would be defined in a separate contract)
+(define-trait governance-token-trait
+  (
+    (get-balance (principal) (response uint uint))
+    (transfer (uint principal principal (optional (buff 34))) (response bool uint))
+    (get-total-supply () (response uint uint))
+  )
+)
+
+;; Proposal states
+(define-constant PROPOSAL_STATE_PENDING u0)
+(define-constant PROPOSAL_STATE_ACTIVE u1)
+(define-constant PROPOSAL_STATE_CANCELED u2)
+(define-constant PROPOSAL_STATE_DEFEATED u3)
+(define-constant PROPOSAL_STATE_SUCCEEDED u4)
+(define-constant PROPOSAL_STATE_QUEUED u5)
+(define-constant PROPOSAL_STATE_EXPIRED u6)
+(define-constant PROPOSAL_STATE_EXECUTED u7)
+
 
