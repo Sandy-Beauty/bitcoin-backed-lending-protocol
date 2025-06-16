@@ -208,3 +208,61 @@
   }
 )
 
+;; Extended user positions to support multiple assets
+(define-map multi-asset-positions
+  { user: principal, asset-id: uint }
+  {
+    supplied-amount: uint,                ;; Amount supplied of this asset
+    borrowed-amount: uint,                ;; Amount borrowed against this asset
+    last-update: uint,                    ;; Last block when interest was calculated
+    ltv-override: uint                    ;; Optional override for LTV (0 means use default)
+  }
+)
+
+;; Asset Registry Functions
+
+;; Add a new supported asset
+(define-public (register-asset 
+               (asset-id uint) 
+               (asset-type (string-ascii 10))
+               (asset-contract principal)
+               (oracle-contract principal)
+               (ltv-ratio uint)
+               (liquidation-threshold uint)
+               (liquidation-penalty uint)
+               (reserve-factor uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (> liquidation-threshold ltv-ratio) (err ERR_INVALID_AMOUNT))
+    (asserts! (<= ltv-ratio u9000) (err ERR_INVALID_AMOUNT)) ;; Max 90% LTV
+    
+    (map-set supported-assets 
+      { asset-id: asset-id }
+      {
+        asset-type: asset-type,
+        asset-contract: asset-contract,
+        oracle-contract: oracle-contract, 
+        ltv-ratio: ltv-ratio,
+        liquidation-threshold: liquidation-threshold,
+        liquidation-penalty: liquidation-penalty,
+        borrowing-enabled: true,
+        borrow-cap: u0,  ;; Unlimited by default
+        reserve-factor: reserve-factor
+      }
+    )
+    
+    (map-set asset-state
+      { asset-id: asset-id }
+      {
+        total-supplied: u0,
+        total-borrowed: u0,
+        utilization: u0,
+        interest-rate: (+ BASE_RATE (/ RATE_SLOPE_1 u2)),
+        exchange-rate: PRECISION  ;; Initial 1:1 exchange rate
+      }
+    )
+    
+    (ok true)
+  )
+)
+
