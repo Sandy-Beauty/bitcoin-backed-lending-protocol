@@ -403,4 +403,45 @@
 (define-constant PROPOSAL_STATE_EXPIRED u6)
 (define-constant PROPOSAL_STATE_EXECUTED u7)
 
+;; Governance parameters
+(define-data-var governance-token principal 'SP000000000000000000002Q6VF78)
+(define-data-var proposal-threshold uint u100000000000) ;; 100 governance tokens to create proposal
+(define-data-var voting-period uint u144) ;; ~1 day at 10-minute blocks
+(define-data-var voting-delay uint u72) ;; ~12 hours at 10-minute blocks
+(define-data-var quorum-votes uint u500000000000) ;; 500 governance tokens required for quorum
+(define-data-var timelock-delay uint u288) ;; ~2 days at 10-minute blocks
+
+;; Proposal data structure
+(define-map proposals
+  { proposal-id: uint }
+  {
+    proposer: principal,
+    description: (string-utf8 500),
+    start-block: uint,
+    end-block: uint,
+    for-votes: uint,
+    against-votes: uint,
+    abstain-votes: uint,
+    canceled: bool,
+    executed: bool,
+    execution-time: uint,
+    actions: (list 10 {
+      target: principal,
+      function-name: (string-ascii 128),
+      function-args: (list 10 (buff 1024))
+    })
+  }
+)
+
+;; Track proposal votes
+(define-map votes
+  { proposal-id: uint, voter: principal }
+  { support: uint, votes: uint } ;; support: 0 = against, 1 = for, 2 = abstain
+)
+
+;; Track delegated voting power
+(define-map delegates
+  { delegator: principal }
+  { delegate: principal }
+)
 
