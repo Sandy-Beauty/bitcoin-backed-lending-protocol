@@ -39,3 +39,80 @@
     risk-score: uint       ;; User risk score (higher is riskier)
   }
 )
+
+;; Map of Bitcoin addresses to Stacks addresses for verification
+(define-map btc-address-verifications
+  { btc-address: (buff 33) }
+  { stacks-owner: principal, verified: bool }
+)
+
+;; Pool state
+(define-data-var total-collateral uint u0)     ;; Total BTC collateral (in satoshis)
+(define-data-var total-borrowed uint u0)       ;; Total borrowed (in micro-USD)
+(define-data-var total-reserves uint u0)       ;; Protocol reserves (in micro-USD)
+(define-data-var last-accrual-time uint u0)    ;; Last time interest was accrued
+(define-data-var current-interest-rate uint u0) ;; Current interest rate (in basis points)
+
+;; Protocol status
+(define-data-var protocol-paused bool false)  ;; Emergency pause switch
+(define-data-var min-borrow-amount uint u50000000)  ;; Minimum borrow amount (50 USD)
+(define-data-var max-utilization uint u9000)  ;; Max utilization rate (90%)
+
+;; Risk parameters
+(define-map risk-parameters
+  { risk-level: uint }
+  {
+    collateral-factor: uint,  ;; How much can be borrowed against collateral
+    interest-multiplier: uint ;; Interest rate multiplier
+  }
+)
+
+;; Protocol health metrics
+(define-data-var bad-debt uint u0)  ;; Uncovered debt from liquidations
+(define-data-var total-liquidations uint u0)  ;; Count of total liquidations
+
+(define-constant ERR_UNAUTHORIZED u1)
+(define-constant ERR_PAUSED u2)
+(define-constant ERR_INVALID_AMOUNT u3)
+(define-constant ERR_INSUFFICIENT_COLLATERAL u4)
+(define-constant ERR_UTILIZATION_TOO_HIGH u5)
+(define-constant ERR_BTC_NOT_VERIFIED u6)
+(define-constant ERR_LOAN_NOT_FOUND u7)
+(define-constant ERR_ALREADY_VERIFIED u8)
+(define-constant ERR_NOT_LIQUIDATABLE u9)
+(define-constant ERR_MIN_BORROW u10)
+(define-constant ERR_INSUFFICIENT_FUNDS u11)
+
+;; Helper for fixed-point multiplication
+(define-private (mul-div (a uint) (b uint) (c uint))
+  (/ (* a b) c)
+)
+
+;; Calculate the collateralization ratio for a position
+(define-private (get-collateral-ratio (collateral uint) (borrowed uint) (btc-price uint))
+  (if (is-eq borrowed u0)
+    ;; If nothing is borrowed, return max uint
+    (- (pow u2 u128) u1)
+    ;; Otherwise, calculate collateralization ratio
+    ;; (collateral * btc-price * 10000) / borrowed
+    (mul-div 
+      (mul-div collateral btc-price PRECISION)
+      u10000
+      borrowed
+    )
+  )
+)
+
+;; Check if a position can be liquidated
+(define-private (is-liquidatable (user principal) (btc-price uint))
+  (let
+    (
+      (position (unwrap! (map-get? user-positions { user: user }) false))
+      (collateral (get btc-collateral position))
+      (borrowed (get borrowed-amount position))
+      (collateral-value (mul-div collateral btc-price PRECISION))
+      (collateral-ratio (get-collateral-ratio collateral borrowed btc-price))
+    )
+    (< collateral-ratio LIQUIDATION_THRESHOLD)
+  )
+)
