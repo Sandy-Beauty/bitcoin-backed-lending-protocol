@@ -266,3 +266,37 @@
   )
 )
 
+;; Update asset parameters
+(define-public (update-asset-parameters
+               (asset-id uint)
+               (ltv-ratio uint)
+               (liquidation-threshold uint)
+               (liquidation-penalty uint)
+               (borrowing-enabled bool)
+               (borrow-cap uint)
+               (reserve-factor uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (> liquidation-threshold ltv-ratio) (err ERR_INVALID_AMOUNT))
+    (asserts! (<= ltv-ratio u9000) (err ERR_INVALID_AMOUNT)) ;; Max 90% LTV
+    
+    (let
+      ((asset (unwrap! (map-get? supported-assets { asset-id: asset-id }) (err ERR_INVALID_AMOUNT))))
+      
+      (map-set supported-assets 
+        { asset-id: asset-id }
+        (merge asset {
+          ltv-ratio: ltv-ratio,
+          liquidation-threshold: liquidation-threshold,
+          liquidation-penalty: liquidation-penalty,
+          borrowing-enabled: borrowing-enabled,
+          borrow-cap: borrow-cap,
+          reserve-factor: reserve-factor
+        })
+      )
+    )
+    
+    (ok true)
+  )
+)
+
