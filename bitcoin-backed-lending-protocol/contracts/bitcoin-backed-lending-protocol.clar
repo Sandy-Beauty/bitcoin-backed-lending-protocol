@@ -553,3 +553,90 @@
     (ok true)
   )
 )
+
+;; Update governance parameters
+(define-public (update-governance-parameters
+               (new-proposal-threshold uint)
+               (new-voting-period uint)
+               (new-voting-delay uint)
+               (new-quorum-votes uint)
+               (new-timelock-delay uint))
+  (begin
+    ;; Only contract owner or through governance can update
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    
+    (var-set proposal-threshold new-proposal-threshold)
+    (var-set voting-period new-voting-period)
+    (var-set voting-delay new-voting-delay)
+    (var-set quorum-votes new-quorum-votes)
+    (var-set timelock-delay new-timelock-delay)
+    
+    (ok true)
+  )
+)
+
+;; Dynamic Interest Rate Model Module
+
+;; Interest rate model types
+(define-constant RATE_MODEL_LINEAR u0)
+(define-constant RATE_MODEL_JUMP u1)
+(define-constant RATE_MODEL_CURVE u2)
+
+;; Interest rate models configuration
+(define-map interest-rate-models
+  { model-id: uint }
+  {
+    model-type: uint,  ;; 0 = linear, 1 = jump rate, 2 = curve
+    base-rate: uint,   ;; Base rate in basis points
+    slope-1: uint,     ;; Slope below optimal utilization
+    slope-2: uint,     ;; Slope above optimal utilization
+    optimal-util: uint,;; Optimal utilization point
+    max-rate: uint     ;; Maximum possible interest rate
+  }
+)
+
+;; Asset to interest model mapping
+(define-map asset-rate-model
+  { asset-id: uint }
+  { model-id: uint }
+)
+
+;; Market stress indicators (used for dynamic rate adjustments)
+(define-data-var market-stress-level uint u0)  ;; 0-100, higher means more stress
+(define-data-var volatility-index uint u0)     ;; Measure of market volatility
+
+;; Historical interest rates for analytics
+(define-map interest-rate-history
+  { asset-id: uint, timestamp: uint }
+  { rate: uint, utilization: uint }
+)
+
+;; Initialize a new interest rate model
+(define-public (add-interest-rate-model
+               (model-id uint)
+               (model-type uint)
+               (base-rate uint)
+               (slope-1 uint)
+               (slope-2 uint)
+               (optimal-util uint)
+               (max-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (<= model-type u2) (err ERR_INVALID_AMOUNT))  ;; Valid model type
+    (asserts! (<= max-rate u10000) (err ERR_INVALID_AMOUNT))  ;; Max 100% interest rate
+    
+    (map-set interest-rate-models
+      { model-id: model-id }
+      {
+        model-type: model-type,
+        base-rate: base-rate,
+        slope-1: slope-1,
+        slope-2: slope-2,
+        optimal-util: optimal-util,
+        max-rate: max-rate
+      }
+    )
+    
+    (ok true)
+  )
+)
