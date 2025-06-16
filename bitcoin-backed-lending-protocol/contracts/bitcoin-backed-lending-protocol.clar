@@ -116,3 +116,49 @@
     (< collateral-ratio LIQUIDATION_THRESHOLD)
   )
 )
+
+;; Initialize the protocol
+(define-public (initialize)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (var-set last-accrual-time stacks-block-height)
+    (var-set current-interest-rate (+ BASE_RATE (/ RATE_SLOPE_1 u2)))
+    
+    ;; Set up initial risk parameters
+    (map-set risk-parameters { risk-level: u10 }
+      { collateral-factor: u9000, interest-multiplier: u8000 }) ;; Low risk: 90% LTV, 80% interest rate
+    (map-set risk-parameters { risk-level: u50 }
+      { collateral-factor: u8000, interest-multiplier: u10000 }) ;; Medium risk: 80% LTV, normal interest
+    (map-set risk-parameters { risk-level: u90 }
+      { collateral-factor: u7000, interest-multiplier: u12000 }) ;; High risk: 70% LTV, 120% interest rate
+    
+    (ok true)
+  )
+)
+
+;; Update risk parameters
+(define-public (update-risk-parameters (risk-level uint) (collateral-factor uint) (interest-multiplier uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (asserts! (<= collateral-factor u9000) (err ERR_INVALID_AMOUNT)) ;; Max 90% LTV
+    
+    (map-set risk-parameters { risk-level: risk-level }
+      { 
+        collateral-factor: collateral-factor,
+        interest-multiplier: interest-multiplier
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Toggle protocol pause state
+(define-public (toggle-protocol-pause)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) (err ERR_UNAUTHORIZED))
+    (var-set protocol-paused (not (var-get protocol-paused)))
+    (ok (var-get protocol-paused))
+  )
+)
+
